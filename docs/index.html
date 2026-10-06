@@ -1,0 +1,872 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SimpleKafka Playground</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: an operations console. Broker strip on top, then a two-column desk:
+   clients on the left, partition replicas and broker logs on the right, ZooKeeper and wire format below. */
+:root {
+  --bg: #EDF0EF;
+  --surface: #FFFFFF;
+  --sunk: #F5F7F6;
+  --ink: #17201D;
+  --muted: #5B6964;
+  --line: #D2DAD7;
+  --accent: #2C4FD3;
+  --accent-soft: #E3E8FB;
+  --commit: #167A62;
+  --commit-soft: #DDF1EA;
+  --pending: #B87908;
+  --pending-soft: #FBEFD6;
+  --dead: #BF3B27;
+  --dead-soft: #F8E0DB;
+  --hdr: #6A4FC9;
+  --body: #167A62;
+  --msg: #B87908;
+  --display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --text: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0F1514; --surface: #171F1E; --sunk: #121918; --ink: #E3EBE8; --muted: #91A19C; --line: #2A3634;
+    --accent: #8EA4FF; --accent-soft: #222C4A; --commit: #4CC79F; --commit-soft: #173A30;
+    --pending: #EBB24C; --pending-soft: #3A2E15; --dead: #F2826D; --dead-soft: #42221C;
+    --hdr: #B3A0FF; --body: #4CC79F; --msg: #EBB24C;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0F1514; --surface: #171F1E; --sunk: #121918; --ink: #E3EBE8; --muted: #91A19C; --line: #2A3634;
+  --accent: #8EA4FF; --accent-soft: #222C4A; --commit: #4CC79F; --commit-soft: #173A30;
+  --pending: #EBB24C; --pending-soft: #3A2E15; --dead: #F2826D; --dead-soft: #42221C;
+  --hdr: #B3A0FF; --body: #4CC79F; --msg: #EBB24C;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--text); font-size: 14px; line-height: 1.45; }
+.wrap { max-width: 1280px; margin: 0 auto; padding-inline: 16px; padding-block: 20px 40px; display: grid; gap: 16px; }
+h1, h2, h3 { font-family: var(--display); margin: 0; text-wrap: balance; }
+h1 { font-size: 30px; font-weight: 700; letter-spacing: -0.01em; }
+h2 { font-size: 17px; font-weight: 600; }
+.mono { font-family: var(--mono); }
+.muted { color: var(--muted); }
+.label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 600; }
+header { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px; }
+header p { margin: 4px 0 0; max-width: 70ch; color: var(--muted); }
+button { font: 500 13px var(--text); border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 6px; padding: 6px 10px; cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--muted); }
+button:disabled { opacity: 0.4; cursor: default; }
+button:focus-visible, input:focus-visible, select:focus-visible, .row:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--surface); }
+button.danger { color: var(--dead); }
+input, select { font: 14px var(--text); color: var(--ink); background: var(--sunk); border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; min-width: 0; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px; display: grid; gap: 10px; align-content: start; min-width: 0; }
+.panel-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+
+/* brokers */
+.brokers { display: grid; grid-template-columns: 170px repeat(3, minmax(0, 1fr)); gap: 10px; }
+.zkcard, .broker { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px; display: grid; gap: 8px; align-content: start; }
+.zkcard { background: var(--sunk); }
+.broker.down { background: var(--sunk); }
+.broker-top { display: flex; justify-content: space-between; align-items: center; gap: 6px; flex-wrap: wrap; }
+.broker h3 { font-size: 19px; font-weight: 600; }
+.pill { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+.pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.p-run { color: var(--commit); background: var(--commit-soft); }
+.p-crash { color: var(--dead); background: var(--dead-soft); }
+.p-stop { color: var(--muted); background: var(--bg); }
+.p-wait { color: var(--pending); background: var(--pending-soft); }
+.ctl { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent); background: var(--accent-soft); padding: 2px 7px; border-radius: 4px; }
+.broker .facts { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; min-height: 2.9em; }
+.broker .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.broker label { font-size: 12.5px; color: var(--muted); display: flex; gap: 6px; align-items: center; }
+
+.desk { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 16px; align-items: start; }
+.col { display: grid; gap: 16px; min-width: 0; }
+
+/* producer */
+form.produce { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+form.produce .full { grid-column: 1 / -1; }
+form.produce .field { display: grid; gap: 3px; min-width: 0; }
+.btnrow { display: flex; gap: 8px; flex-wrap: wrap; }
+.sends { display: grid; gap: 4px; max-height: 260px; overflow-y: auto; }
+.send { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; padding: 6px 8px; border-radius: 6px; background: var(--sunk); font-size: 13px; }
+.send .v { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.send .where { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.send .note { grid-column: 1 / -1; font-size: 12px; color: var(--muted); }
+.st-ok { color: var(--commit); font-weight: 600; font-size: 12px; }
+.st-acks, .st-retrying { color: var(--pending); font-weight: 600; font-size: 12px; }
+.st-failed { color: var(--dead); font-weight: 600; font-size: 12px; }
+
+/* consumer */
+.consumed { font-family: var(--mono); font-size: 12.5px; background: var(--sunk); border-radius: 6px; padding: 8px 10px; max-height: 240px; overflow-y: auto; display: grid; gap: 2px; }
+.consumed .o { color: var(--muted); }
+
+/* partitions */
+.part { border-top: 1px solid var(--line); padding-top: 10px; display: grid; gap: 6px; }
+.part:first-of-type { border-top: 0; padding-top: 0; }
+.part-head { display: flex; gap: 10px; flex-wrap: wrap; align-items: baseline; font-size: 13px; }
+.part-head b { font-family: var(--display); font-size: 15px; }
+.row { display: grid; grid-template-columns: 112px minmax(0, 1fr) 118px; gap: 8px; align-items: center; padding: 3px 4px; border-radius: 6px; cursor: pointer; }
+.row:hover, .row.sel { background: var(--sunk); }
+.row.off { opacity: 0.45; }
+.who { font-size: 12.5px; display: flex; gap: 6px; align-items: center; }
+.who b { font-family: var(--mono); font-weight: 600; }
+.role { font-size: 11px; color: var(--muted); }
+.role.lead { color: var(--accent); font-weight: 600; }
+.role.out { color: var(--dead); }
+.strip { display: flex; gap: 2px; overflow: hidden; }
+.cell { flex: 0 0 auto; width: 18px; height: 20px; border-radius: 3px; font: 500 9.5px/20px var(--mono); text-align: center; color: transparent; }
+.cell.seg { margin-left: 5px; }
+.c-commit { background: var(--commit); color: var(--surface); }
+.c-unc { background: repeating-linear-gradient(135deg, var(--pending) 0 3px, var(--pending-soft) 3px 6px); color: var(--ink); }
+.c-none { background: var(--sunk); border: 1px dashed var(--line); }
+.more { font: 11px var(--mono); color: var(--muted); align-self: center; margin-right: 4px; white-space: nowrap; }
+.nums { font: 12px var(--mono); color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+.legend span { display: inline-flex; gap: 5px; align-items: center; }
+.legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; }
+
+.disk { background: var(--sunk); border-radius: 8px; padding: 10px 12px; display: grid; gap: 8px; }
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font: 12px var(--mono); font-variant-numeric: tabular-nums; }
+th { text-align: left; font: 600 11px var(--text); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); padding: 4px 8px 4px 0; }
+td { padding: 4px 8px 4px 0; border-top: 1px solid var(--line); white-space: nowrap; vertical-align: top; }
+
+/* events */
+.events { font: 12px/1.55 var(--mono); background: var(--sunk); border-radius: 8px; padding: 8px 10px; height: 300px; overflow-y: auto; }
+.ev { display: grid; grid-template-columns: 86px 74px minmax(0, 1fr); gap: 8px; }
+.ev .t { color: var(--muted); }
+.ev .s { color: var(--muted); }
+.ev.k-ctl .m { color: var(--accent); }
+.ev.k-lead .m { color: var(--commit); }
+.ev.k-warn .m { color: var(--dead); }
+.ev.k-isr .m { color: var(--pending); }
+
+.lower { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+pre.zk { margin: 0; font: 12px/1.6 var(--mono); background: var(--sunk); border-radius: 8px; padding: 10px 12px; overflow-x: auto; }
+.zk .path { color: var(--ink); }
+.zk .data { color: var(--accent); }
+.zk .eph { color: var(--muted); }
+.wire { display: flex; flex-wrap: wrap; gap: 8px 6px; }
+.fld { display: grid; gap: 2px; padding: 4px 6px; border-radius: 5px; background: var(--sunk); border-top: 3px solid var(--line); min-width: 0; }
+.fld.hdr { border-top-color: var(--hdr); }
+.fld.body { border-top-color: var(--body); }
+.fld.msg { border-top-color: var(--msg); }
+.fld .hex { font: 12px var(--mono); word-break: break-all; }
+.fld .lbl { font-size: 10.5px; color: var(--muted); }
+.tips { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
+.tip { font-size: 13px; padding: 10px 12px; border-radius: 8px; background: var(--sunk); }
+.tip b { display: block; font-family: var(--display); font-size: 14px; margin-bottom: 2px; }
+
+@media (max-width: 960px) {
+  .brokers { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .desk, .lower { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 520px) {
+  .brokers { grid-template-columns: minmax(0, 1fr); }
+  form.produce { grid-template-columns: 1fr; }
+  .row { grid-template-columns: 84px minmax(0, 1fr); }
+  .row .nums { grid-column: 2; text-align: left; }
+  .ev { grid-template-columns: 70px minmax(0, 1fr); }
+  .ev .s { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header>
+    <div>
+      <h1>SimpleKafka Playground</h1>
+      <p>The SimpleKafka cluster you built, running in your browser: one ZooKeeper, three brokers, a controller and replicated partitions. Send messages, then kill a broker and watch the controller move leadership.</p>
+    </div>
+    <button type="button" id="reset">Reset cluster</button>
+  </header>
+
+  <section class="brokers" id="brokers" aria-label="Cluster"></section>
+
+  <div class="desk">
+    <div class="col">
+      <section class="panel" aria-labelledby="prod-h">
+        <div class="panel-head"><h2 id="prod-h">Producer</h2><span class="muted mono" style="font-size:12px">acks=all</span></div>
+        <form class="produce" id="produce">
+          <div class="field"><label class="label" for="p-topic">Topic</label><input id="p-topic" value="test-topic" autocomplete="off"></div>
+          <div class="field"><label class="label" for="p-boot">Bootstrap broker</label>
+            <select id="p-boot"><option value="1">localhost:9091</option><option value="2">localhost:9092</option><option value="3">localhost:9093</option></select></div>
+          <div class="field"><label class="label" for="p-key">Key (optional)</label><input id="p-key" placeholder="same key, same partition" autocomplete="off"></div>
+          <div class="field"><label class="label" for="p-val">Message</label><input id="p-val" value="order #1042 paid" autocomplete="off"></div>
+          <div class="btnrow full"><button class="primary" type="submit">Send</button><button type="button" id="send10">Send 10</button></div>
+        </form>
+        <div class="sends" id="sends" aria-live="polite"></div>
+      </section>
+
+      <section class="panel" aria-labelledby="cons-h">
+        <div class="panel-head"><h2 id="cons-h">Consumer</h2>
+          <div class="btnrow"><label class="label" for="c-part" style="align-self:center">Partition</label><select id="c-part"></select></div></div>
+        <div class="muted" style="font-size:12.5px" id="c-status"></div>
+        <div class="consumed" id="consumed"></div>
+      </section>
+    </div>
+
+    <div class="col">
+      <section class="panel" aria-labelledby="part-h">
+        <div class="panel-head"><h2 id="part-h">Partitions and replicas</h2><select id="t-sel" aria-label="Topic"></select></div>
+        <div class="legend">
+          <span><i style="background:var(--commit)"></i>committed (below high watermark)</span>
+          <span><i style="background:repeating-linear-gradient(135deg,var(--pending) 0 3px,var(--pending-soft) 3px 6px)"></i>not yet on every ISR replica</span>
+          <span>Click a replica to see its files</span>
+        </div>
+        <div id="parts"></div>
+        <div id="disk"></div>
+      </section>
+
+      <section class="panel" aria-labelledby="ev-h">
+        <div class="panel-head"><h2 id="ev-h">Broker logs</h2><span class="muted" style="font-size:12px">same lines the Java brokers print</span></div>
+        <div class="events" id="events" role="log"></div>
+      </section>
+    </div>
+  </div>
+
+  <div class="lower">
+    <section class="panel" aria-labelledby="zk-h">
+      <div class="panel-head"><h2 id="zk-h">ZooKeeper</h2><span class="muted mono" style="font-size:12px">localhost:2181</span></div>
+      <pre class="zk" id="zk"></pre>
+    </section>
+    <section class="panel" aria-labelledby="w-h">
+      <div class="panel-head"><h2 id="w-h">Last produce request on the wire</h2><span class="muted mono" style="font-size:12px" id="w-size"></span></div>
+      <div class="legend"><span><i style="background:var(--hdr)"></i>frame and header</span><span><i style="background:var(--body)"></i>produce body</span><span><i style="background:var(--msg)"></i>message</span></div>
+      <div class="wire" id="wire"></div>
+    </section>
+  </div>
+
+  <section class="panel" aria-labelledby="tips-h">
+    <h2 id="tips-h">Things to try</h2>
+    <div class="tips">
+      <div class="tip"><b>Crash a leader</b>Press Kill on the broker that leads a partition. Its ZooKeeper session lingers for 6 seconds, sends to it retry, then the controller elects a new leader from the ISR.</div>
+      <div class="tip"><b>Crash the controller</b>Kill the broker marked Controller. When its session expires the others race to create /controller and one wins.</div>
+      <div class="tip"><b>Stop cleanly</b>Stop closes the ZooKeeper session at once, so failover is immediate instead of waiting for the timeout.</div>
+      <div class="tip"><b>Lagging follower</b>Tick Pause fetching on a follower and keep sending. After 10 seconds without catching up the leader drops it from the ISR, then adds it back when you untick.</div>
+      <div class="tip"><b>Lose two of three</b>Stop two brokers. The survivor leads every partition with a one-broker ISR, and acks=all still succeeds.</div>
+      <div class="tip"><b>Everyone down</b>Stop all three, then start one. Partitions whose ISR members are all down stay offline until one of them returns, so no committed message is lost.</div>
+    </div>
+  </section>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  // Timings match the Java defaults.
+  const SESSION_MS = 6000, LAG_MS = 10000, FETCH_MS = 250, ACK_TIMEOUT_MS = 10000, RETRY_MS = 500, MAX_RETRIES = 20;
+  const FETCH_MAX = 4, SEGMENT_BYTES = 240, INDEX_INTERVAL = 96, WINDOW = 22;
+  const enc = new TextEncoder();
+  const clock = () => performance.now();
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  let S;
+
+  // ---------------------------------------------------------------- logging
+  function stamp() {
+    const d = new Date();
+    const p = (n, w) => String(n).padStart(w || 2, "0");
+    return p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds()) + "." + p(d.getMilliseconds(), 3);
+  }
+  function logEv(src, msg, kind) {
+    S.events.push({ t: stamp(), src: src == null ? "zookeeper" : typeof src === "number" ? "broker " + src : src, msg, kind: kind || "" });
+    if (S.events.length > 400) S.events.splice(0, S.events.length - 400);
+  }
+
+  // ---------------------------------------------------------------- cluster state
+  function init() {
+    S = { zk: { brokers: {}, controller: null, topics: {}, zxid: 0 }, brokers: {}, events: [], sends: [],
+          corr: 0, rr: 0, wire: null, lastFetch: 0, disk: null, nextSendId: 1, renderedEvents: -1 };
+    for (const id of [1, 2, 3]) S.brokers[id] = { id, port: 9090 + id, status: "stopped", expiresAt: 0, slow: false, parts: {} };
+    logEv(null, "ZooKeeper server started on port 2181");
+    for (const id of [1, 2, 3]) startBroker(id);
+    const samples = ["hello 1", "hello 2", "hello 3", "hello 4", "hello 5", "hello 6", "hello 7", "hello 8", "hello 9"];
+    for (const v of samples) send("test-topic", "", v);
+    for (let i = 0; i < 5; i++) fetchRound();
+    for (const s of S.sends) checkSend(s);
+  }
+  const liveIds = () => Object.keys(S.zk.brokers).map(Number).sort((a, b) => a - b);
+  const isServing = (b) => b.status === "running" && !!S.zk.brokers[b.id];
+  const fmt = (a) => "[" + a.join(", ") + "]";
+
+  function getPart(b, t, p) {
+    const k = t + "-" + p;
+    if (!b.parts[k]) b.parts[k] = { t, p, log: [], hw: 0, role: null, epoch: -1, leader: -1, fLeo: {}, caught: {}, prevLeo: {}, prevTime: {} };
+    return b.parts[k];
+  }
+
+  function startBroker(id) {
+    const b = S.brokers[id];
+    if (b.status === "running" || b.status === "waiting") return;
+    logEv(id, "Starting broker " + id + " on localhost:" + b.port + " (ZooKeeper localhost:2181)");
+    if (S.zk.brokers[id]) {
+      b.status = "waiting";
+      logEv(id, "Waiting for the previous registration of broker " + id + " to expire", "warn");
+      return;
+    }
+    b.status = "running";
+    register(b);
+  }
+
+  function register(b) {
+    S.zk.brokers[b.id] = { port: b.port, czxid: ++S.zk.zxid };
+    logEv(b.id, "Registered broker " + b.id + " (localhost:" + b.port + ") in ZooKeeper");
+    brokersChanged([b.id], []);
+    for (const t in S.zk.topics) for (const p in S.zk.topics[t].states) applyState(b, t, +p);
+    electIfNeeded();
+    if (S.zk.controller != null && S.zk.controller !== b.id) logEv(b.id, "Current controller is broker " + S.zk.controller);
+  }
+
+  function crashBroker(id) {
+    const b = S.brokers[id];
+    if (b.status !== "running") return;
+    b.status = "crashed";
+    b.expiresAt = clock() + SESSION_MS;
+    for (const k in b.parts) b.parts[k].role = null;
+    logEv(id, "Process killed (kill -9). Its ZooKeeper session stays open until it times out in 6 s", "warn");
+  }
+
+  function stopBroker(id) {
+    const b = S.brokers[id];
+    if (b.status === "waiting") { b.status = "stopped"; logEv(id, "Startup cancelled"); return; }
+    if (b.status !== "running") return;
+    logEv(id, "Shutting down broker " + id);
+    b.status = "stopped";
+    for (const k in b.parts) b.parts[k].role = null;
+    removeNode(id);
+    logEv(id, "Broker " + id + " shut down");
+  }
+
+  function removeNode(id) {
+    delete S.zk.brokers[id];
+    const wasController = S.zk.controller === id;
+    if (wasController) S.zk.controller = null;
+    brokersChanged([], [id]);
+    if (wasController) electIfNeeded();
+  }
+
+  // ---------------------------------------------------------------- controller
+  function brokersChanged(joined, left) {
+    const c = S.zk.controller;
+    if (c == null || S.brokers[c].status !== "running") return;
+    let line = "Live brokers now " + fmt(liveIds());
+    if (joined.length) line += " (joined " + fmt(joined) + ")";
+    if (left.length) line += " (left " + fmt(left) + ")";
+    logEv(c, line);
+    if (left.length) logEv(c, "Controller: brokers " + fmt(left) + " failed, electing new leaders where needed", "ctl");
+    reconcileAll();
+  }
+
+  function electIfNeeded() {
+    if (S.zk.controller != null) return;
+    const candidates = liveIds().filter((id) => S.brokers[id].status === "running");
+    if (!candidates.length) return;
+    const winner = candidates[Math.floor(Math.random() * candidates.length)];
+    S.zk.controller = winner;
+    logEv(winner, "Broker " + winner + " won the election and is now the CONTROLLER", "ctl");
+    for (const id of candidates) if (id !== winner) logEv(id, "Current controller is broker " + winner);
+    reconcileAll();
+  }
+
+  function reconcileAll() {
+    for (const t in S.zk.topics) for (const p in S.zk.topics[t].states) reconcile(t, +p);
+  }
+
+  // Same rules as Controller.reconcile: keep a live leader, otherwise pick the first live in-sync replica.
+  function reconcile(t, p) {
+    const T = S.zk.topics[t], cur = T.states[p], replicas = T.assignment[p];
+    const live = new Set(liveIds());
+    const liveIsr = cur.isr.filter((r) => live.has(r));
+    let next;
+    if (cur.leader >= 0 && live.has(cur.leader)) next = { leader: cur.leader, epoch: cur.epoch, isr: liveIsr };
+    else {
+      const r = replicas.find((x) => liveIsr.includes(x));
+      if (r !== undefined) next = { leader: r, epoch: cur.epoch + 1, isr: liveIsr };
+      else next = cur.leader === -1 ? cur : { leader: -1, epoch: cur.epoch + 1, isr: cur.isr };
+    }
+    if (next.leader === cur.leader && next.epoch === cur.epoch && next.isr.join() === cur.isr.join()) return;
+    const c = S.zk.controller;
+    if (cur.leader !== next.leader) logEv(c, "Controller: " + t + "-" + p + " leader " + cur.leader + " -> " + next.leader + " (epoch " + next.epoch + ", isr " + fmt(next.isr) + ")", "ctl");
+    else logEv(c, "Controller: " + t + "-" + p + " isr " + fmt(cur.isr) + " -> " + fmt(next.isr), "ctl");
+    writeState(t, p, next);
+  }
+
+  function writeState(t, p, st) {
+    const T = S.zk.topics[t];
+    T.states[p] = { leader: st.leader, epoch: st.epoch, isr: st.isr.slice(), version: T.states[p].version + 1 };
+    for (const r of T.assignment[p]) if (isServing(S.brokers[r])) applyState(S.brokers[r], t, p);
+  }
+
+  function createTopic(topic, bootId) {
+    const boot = S.brokers[bootId];
+    const anyUp = liveIds().some((id) => S.brokers[id].status === "running");
+    if (!anyUp) return "No broker reachable for metadata";
+    if (!/^[a-zA-Z0-9._-]{1,200}$/.test(topic)) return "INVALID_REQUEST: topic names may only use letters, digits, '.', '_' and '-'";
+    const c = S.zk.controller;
+    if (c == null || S.brokers[c].status !== "running") return "NOT_CONTROLLER: no controller is reachable right now";
+    const brokers = liveIds();
+    const rf = Math.min(3, brokers.length);
+    const start = Math.floor(Math.random() * brokers.length);
+    const assignment = {}, states = {};
+    for (let p = 0; p < 3; p++) {
+      const reps = [];
+      for (let i = 0; i < rf; i++) reps.push(brokers[(start + p + i) % brokers.length]);
+      assignment[p] = reps;
+      states[p] = { leader: reps[0], epoch: 0, isr: reps.slice(), version: 0 };
+    }
+    S.zk.topics[topic] = { assignment, states };
+    const desc = Object.keys(assignment).map((p) => p + "=" + fmt(assignment[p])).join(", ");
+    if (boot && boot.status === "running" && bootId !== c) logEv(bootId, "Forwarding CREATE_TOPIC " + topic + " to controller " + c);
+    logEv(c, "Controller: created topic " + topic + " with 3 partitions, replicas {" + desc + "}", "ctl");
+    for (const p in assignment) for (const r of assignment[p]) if (isServing(S.brokers[r])) applyState(S.brokers[r], topic, +p);
+    return null;
+  }
+
+  // ---------------------------------------------------------------- replica roles (Partition.makeLeader / makeFollower)
+  function applyState(b, t, p) {
+    const st = S.zk.topics[t].states[p];
+    const part = getPart(b, t, p);
+    const key = t + "-" + p;
+    if (st.leader === b.id) {
+      const newTerm = part.role !== "leader" || part.epoch !== st.epoch;
+      part.role = "leader"; part.epoch = st.epoch; part.leader = b.id;
+      if (newTerm) {
+        part.fLeo = {}; part.prevLeo = {}; part.prevTime = {};
+        const now = clock();
+        for (const r of S.zk.topics[t].assignment[p]) part.caught[r] = now;
+        logEv(b.id, key + ": became LEADER at epoch " + st.epoch + " (log end offset " + part.log.length + ", high watermark " + part.hw + ", isr " + fmt(st.isr) + ")", "lead");
+      }
+      leaderIncHw(b, t, p);
+    } else {
+      const newTerm = part.role !== "follower" || part.epoch !== st.epoch || part.leader !== st.leader;
+      part.role = "follower"; part.epoch = st.epoch; part.leader = st.leader;
+      if (newTerm) {
+        const oldEnd = part.log.length;
+        part.log = part.log.slice(0, part.hw);
+        logEv(b.id, key + ": became FOLLOWER of broker " + st.leader + " at epoch " + st.epoch + " (truncated log end offset " + oldEnd + " -> " + part.log.length + ")");
+      }
+    }
+  }
+
+  function leaderIncHw(b, t, p) {
+    const part = b.parts[t + "-" + p];
+    if (!part || part.role !== "leader") return;
+    const st = S.zk.topics[t].states[p];
+    let hw = part.log.length;
+    for (const r of st.isr) if (r !== b.id) hw = Math.min(hw, part.fLeo[r] != null ? part.fLeo[r] : part.hw);
+    if (hw > part.hw) part.hw = hw;
+  }
+
+  // Leader side of a follower FETCH: record the follower's position, maybe expand the ISR.
+  function updateFollower(L, lp, r, off) {
+    const now = clock(), leo = lp.log.length;
+    lp.fLeo[r] = off;
+    const prev = lp.prevLeo[r];
+    if (off >= leo) lp.caught[r] = now;
+    else if (prev != null && off >= prev) lp.caught[r] = Math.max(lp.caught[r] || 0, lp.prevTime[r]);
+    lp.prevLeo[r] = leo; lp.prevTime[r] = now;
+    const st = S.zk.topics[lp.t].states[lp.p];
+    if (!st.isr.includes(r) && S.zk.topics[lp.t].assignment[lp.p].includes(r) && off >= lp.hw) {
+      const n = st.isr.concat([r]);
+      logEv(L.id, lp.t + "-" + lp.p + ": broker " + r + " caught up, expanding ISR " + fmt(st.isr) + " -> " + fmt(n), "isr");
+      writeState(lp.t, lp.p, { leader: st.leader, epoch: st.epoch, isr: n });
+    }
+    leaderIncHw(L, lp.t, lp.p);
+  }
+
+  // One pass of every ReplicaFetcher thread.
+  function fetchRound() {
+    for (const id of [1, 2, 3]) {
+      const f = S.brokers[id];
+      if (!isServing(f) || f.slow) continue;
+      for (const k in f.parts) {
+        const part = f.parts[k];
+        if (part.role !== "follower") continue;
+        const L = S.brokers[part.leader];
+        if (!L || L.status !== "running") continue;
+        const lp = L.parts[k];
+        if (!lp || lp.role !== "leader" || lp.epoch !== part.epoch) continue;
+        const off = part.log.length;
+        updateFollower(L, lp, f.id, off);
+        if (off > lp.log.length) {
+          logEv(f.id, k + ": log end offset " + off + " is ahead of leader's " + lp.log.length + ", truncating");
+          part.log = part.log.slice(0, lp.log.length);
+          continue;
+        }
+        const msgs = lp.log.slice(off, off + FETCH_MAX);
+        for (const m of msgs) part.log.push(Object.assign({}, m));
+        const hw = Math.min(lp.hw, part.log.length);
+        if (hw > part.hw) part.hw = hw;
+      }
+    }
+  }
+
+  function shrinkCheck() {
+    const now = clock();
+    for (const id of [1, 2, 3]) {
+      const L = S.brokers[id];
+      if (!isServing(L)) continue;
+      for (const k in L.parts) {
+        const lp = L.parts[k];
+        if (lp.role !== "leader") continue;
+        const st = S.zk.topics[lp.t].states[lp.p];
+        const lag = st.isr.filter((r) => r !== id && now - (lp.caught[r] || 0) > LAG_MS);
+        if (!lag.length) continue;
+        const n = st.isr.filter((r) => !lag.includes(r));
+        logEv(id, k + ": brokers " + fmt(lag) + " fell behind, shrinking ISR " + fmt(st.isr) + " -> " + fmt(n), "isr");
+        writeState(lp.t, lp.p, { leader: st.leader, epoch: st.epoch, isr: n });
+        leaderIncHw(L, lp.t, lp.p);
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------- producer client
+  function javaHash(str) {
+    let h = 1;
+    for (const b of enc.encode(str)) h = (Math.imul(31, h) + (b << 24 >> 24)) | 0;
+    return h;
+  }
+
+  function send(topic, key, value) {
+    const s = { id: S.nextSendId++, topic, key: key || null, value, status: "new", attempts: 0, note: "" };
+    S.sends.unshift(s);
+    if (S.sends.length > 40) S.sends.length = 40;
+    if (!S.zk.topics[topic]) {
+      const err = createTopic(topic, +$("p-boot").value || 1);
+      if (err) { s.status = "failed"; s.note = err; return; }
+    }
+    const n = Object.keys(S.zk.topics[topic].assignment).length;
+    s.partition = s.key ? (javaHash(s.key) & 0x7fffffff) % n : (S.rr++ & 0x7fffffff) % n;
+    attempt(s);
+  }
+
+  function retry(s, note) {
+    if (s.attempts > MAX_RETRIES) { s.status = "failed"; s.note = note + ". Gave up after " + MAX_RETRIES + " retries"; return; }
+    s.status = "retrying"; s.note = note; s.nextAt = clock() + RETRY_MS;
+  }
+
+  function attempt(s) {
+    s.attempts++;
+    const st = S.zk.topics[s.topic].states[s.partition];
+    if (st.leader < 0) return retry(s, "LEADER_NOT_AVAILABLE: every in-sync replica is down");
+    const L = S.brokers[st.leader];
+    if (L.status !== "running") return retry(s, "Connection refused by broker " + L.id + ", refreshing metadata");
+    const lp = L.parts[s.topic + "-" + s.partition];
+    if (!lp || lp.role !== "leader") return retry(s, "NOT_LEADER_FOR_PARTITION");
+    const ts = Date.now();
+    lp.log.push({ offset: lp.log.length, key: s.key, value: s.value, ts });
+    s.offset = lp.log.length - 1; s.leader = L.id; s.epoch = lp.epoch;
+    s.status = "acks"; s.note = ""; s.deadline = clock() + ACK_TIMEOUT_MS;
+    S.wire = buildFrame(s, ts);
+    leaderIncHw(L, s.topic, s.partition);
+    checkSend(s);
+  }
+
+  function checkSend(s) {
+    if (s.status !== "acks") return;
+    const L = S.brokers[s.leader], lp = L.parts[s.topic + "-" + s.partition];
+    if (L.status !== "running" || !lp || lp.role !== "leader" || lp.epoch !== s.epoch) return retry(s, "Leader changed while waiting for acks, resending");
+    if (lp.hw >= s.offset + 1) { s.status = "ok"; return; }
+    if (clock() > s.deadline) { s.status = "failed"; s.note = "REQUEST_TIMED_OUT: not every in-sync replica got it within 10 s"; }
+  }
+
+  // ProduceRequest exactly as KafkaConnection + ProduceRequest.writeTo encode it.
+  function buildFrame(s, ts) {
+    const i16 = (v) => { const b = new Uint8Array(2); new DataView(b.buffer).setInt16(0, v); return b; };
+    const i32 = (v) => { const b = new Uint8Array(4); new DataView(b.buffer).setInt32(0, v); return b; };
+    const i64 = (v) => { const b = new Uint8Array(8); new DataView(b.buffer).setBigInt64(0, BigInt(v)); return b; };
+    const cat = (a, b) => { const c = new Uint8Array(a.length + b.length); c.set(a); c.set(b, a.length); return c; };
+    const str = (v) => { const e = enc.encode(v); return cat(i16(e.length), e); };
+    const bytes = (v) => v == null ? i32(-1) : cat(i32(enc.encode(v).length), enc.encode(v));
+    const f = [
+      ["api key = 0 (PRODUCE)", i16(0), "hdr"],
+      ["correlation id = " + S.corr, i32(S.corr++), "hdr"],
+      ['client id = "producer"', str("producer"), "hdr"],
+      ['topic = "' + s.topic + '"', str(s.topic), "body"],
+      ["partition = " + s.partition, i32(s.partition), "body"],
+      ["acks = -1 (all)", i16(-1), "body"],
+      ["timeout ms = 10000", i32(10000), "body"],
+      ["message count = 1", i32(1), "body"],
+      ["offset = -1 (broker assigns)", i64(-1), "msg"],
+      ["timestamp = " + ts, i64(ts), "msg"],
+      [s.key == null ? "key = null (-1)" : 'key = "' + s.key + '"', bytes(s.key), "msg"],
+      ['value = "' + s.value + '"', bytes(s.value), "msg"]
+    ];
+    const total = f.reduce((n, x) => n + x[1].length, 0);
+    f.unshift(["size = " + total, i32(total), "hdr"]);
+    return { fields: f, total: total + 4 };
+  }
+
+  // ---------------------------------------------------------------- storage view (LogSegment layout)
+  const recordSize = (m) => 12 + 20 + (m.key == null ? 0 : enc.encode(m.key).length) + enc.encode(m.value).length;
+  function segments(log) {
+    const segs = [];
+    let cur = null;
+    for (const m of log) {
+      if (!cur || cur.size >= SEGMENT_BYTES) { cur = { base: m.offset, size: 0, count: 0, index: [], since: 0, last: m.offset }; segs.push(cur); }
+      if (cur.since >= INDEX_INTERVAL) { cur.index.push([m.offset - cur.base, cur.size]); cur.since = 0; }
+      const sz = recordSize(m);
+      cur.size += sz; cur.since += sz; cur.count++; cur.last = m.offset;
+    }
+    if (!segs.length) segs.push({ base: 0, size: 0, count: 0, index: [], last: -1 });
+    return segs;
+  }
+  const fname = (n) => String(n).padStart(20, "0");
+
+  // ---------------------------------------------------------------- tick
+  function tick() {
+    const now = clock();
+    for (const id of [1, 2, 3]) {
+      const b = S.brokers[id];
+      if (b.expiresAt && now >= b.expiresAt && S.zk.brokers[id] && b.status !== "running") {
+        b.expiresAt = 0;
+        logEv(null, "Session of broker " + id + " expired; deleting /brokers/ids/" + id + (S.zk.controller === id ? " and /controller" : ""), "warn");
+        removeNode(id);
+        if (b.status === "waiting") { b.status = "running"; register(b); }
+      }
+    }
+    if (now - S.lastFetch >= FETCH_MS) { S.lastFetch = now; fetchRound(); }
+    shrinkCheck();
+    for (const s of S.sends) {
+      if (s.status === "retrying" && now >= s.nextAt) attempt(s);
+      else if (s.status === "acks") checkSend(s);
+    }
+    render();
+  }
+
+  // ---------------------------------------------------------------- rendering
+  const cache = {};
+  function put(id, html) { if (cache[id] !== html) { cache[id] = html; $(id).innerHTML = html; } }
+
+  function renderBrokers() {
+    const now = clock();
+    const liveN = liveIds().length;
+    let h = '<div class="zkcard"><div class="label">ZooKeeper</div><h3 style="font-size:19px;font-family:var(--display)">:2181</h3>' +
+      '<div class="muted" style="font-size:12.5px">' + liveN + " broker" + (liveN === 1 ? "" : "s") + " registered<br>controller: " +
+      (S.zk.controller == null ? "none" : "broker " + S.zk.controller) + "</div></div>";
+    for (const id of [1, 2, 3]) {
+      const b = S.brokers[id];
+      let pill;
+      if (b.status === "running") pill = '<span class="pill p-run">running</span>';
+      else if (b.status === "crashed") pill = '<span class="pill p-crash">crashed</span>';
+      else if (b.status === "waiting") pill = '<span class="pill p-wait">starting</span>';
+      else pill = '<span class="pill p-stop">stopped</span>';
+      let leads = 0, follows = 0;
+      for (const k in b.parts) { if (b.parts[k].role === "leader") leads++; else if (b.parts[k].role === "follower") follows++; }
+      let facts;
+      if (b.status === "running") facts = "Leads " + leads + " · follows " + follows + " partition" + (follows === 1 ? "" : "s");
+      else if (S.zk.brokers[id] && b.expiresAt) facts = "ZooKeeper still lists it. Session expires in " + Math.max(0, (b.expiresAt - now) / 1000).toFixed(1) + " s";
+      else facts = "Not registered. Data stays on disk for a restart";
+      const isCtl = S.zk.controller === id;
+      h += '<div class="broker' + (b.status === "running" ? "" : " down") + '"><div class="broker-top"><h3>Broker ' + id + "</h3>" + pill + "</div>" +
+        '<div class="mono muted" style="font-size:12px">localhost:' + b.port + (isCtl ? ' &nbsp;<span class="ctl">Controller</span>' : "") + "</div>" +
+        '<div class="facts">' + facts + "</div>" +
+        '<div class="actions">' +
+        '<button type="button" class="danger" data-act="kill" data-id="' + id + '"' + (b.status === "running" ? "" : " disabled") + ">Kill</button>" +
+        '<button type="button" data-act="stop" data-id="' + id + '"' + (b.status === "running" || b.status === "waiting" ? "" : " disabled") + ">Stop</button>" +
+        '<button type="button" data-act="start" data-id="' + id + '"' + (b.status === "stopped" || b.status === "crashed" ? "" : " disabled") + ">Start</button></div>" +
+        '<label><input type="checkbox" id="slow-' + id + '" data-act="slow" data-id="' + id + '"' + (b.slow ? " checked" : "") + "> Pause fetching</label></div>";
+    }
+    put("brokers", h);
+  }
+
+  function topicNames() { return Object.keys(S.zk.topics).sort(); }
+
+  function syncSelect(sel, values, labels) {
+    const want = values.join("|");
+    if (sel.dataset.v !== want) {
+      const keep = sel.value;
+      sel.innerHTML = values.map((v, i) => '<option value="' + esc(v) + '">' + esc(labels[i]) + "</option>").join("");
+      sel.dataset.v = want;
+      if (values.includes(keep)) sel.value = keep;
+    }
+  }
+
+  function renderPartitions() {
+    const tSel = $("t-sel");
+    const names = topicNames();
+    syncSelect(tSel, names, names);
+    const t = tSel.value;
+    if (!t || !S.zk.topics[t]) { put("parts", '<p class="muted">No topics yet. Send a message to create one.</p>'); put("disk", ""); return; }
+    const T = S.zk.topics[t];
+    let h = "";
+    for (const p of Object.keys(T.assignment).map(Number)) {
+      const st = T.states[p], reps = T.assignment[p], key = t + "-" + p;
+      let maxLen = 0;
+      for (const r of reps) { const pt = S.brokers[r].parts[key]; if (pt) maxLen = Math.max(maxLen, pt.log.length); }
+      const from = Math.max(0, maxLen - WINDOW);
+      h += '<div class="part"><div class="part-head"><b>Partition ' + p + "</b>" +
+        (st.leader < 0 ? '<span class="pill p-crash">offline</span>' : '<span class="muted">leader <b class="mono" style="font-size:13px">' + st.leader + "</b></span>") +
+        '<span class="muted mono" style="font-size:12px">epoch ' + st.epoch + " · isr " + fmt(st.isr) + "</span></div>";
+      for (const r of reps) {
+        const b = S.brokers[r], pt = b.parts[key] || { log: [], hw: 0 };
+        let role, cls = "";
+        if (b.status !== "running") { role = b.status === "crashed" ? "crashed" : b.status === "waiting" ? "starting" : "stopped"; cls = " out"; }
+        else if (st.leader === r) { role = "leader"; cls = " lead"; }
+        else if (st.isr.includes(r)) role = "follower, in sync";
+        else { role = "follower, out of sync"; cls = " out"; }
+        const sel = S.disk && S.disk.broker === r && S.disk.key === key;
+        let cells = from > 0 ? '<span class="more">+' + from + "</span>" : "";
+        const segStarts = new Set(segments(pt.log).map((sg) => sg.base));
+        for (let o = from; o < Math.max(maxLen, from + 1); o++) {
+          const c = o < pt.hw ? "c-commit" : o < pt.log.length ? "c-unc" : "c-none";
+          const seg = o > 0 && o > from && segStarts.has(o) && o < pt.log.length ? " seg" : "";
+          const v = o < pt.log.length ? pt.log[o].value : "";
+          cells += '<span class="cell ' + c + seg + '" title="offset ' + o + (v ? ": " + esc(v) : "") + '">' + (o < pt.log.length ? o : "") + "</span>";
+        }
+        h += '<div class="row' + (b.status !== "running" ? " off" : "") + (sel ? " sel" : "") + '" tabindex="0" role="button" data-disk="' + r + '" data-key="' + esc(key) + '">' +
+          '<div class="who"><b>B' + r + '</b><span class="role' + cls + '">' + role + "</span></div>" +
+          '<div class="strip">' + cells + "</div>" +
+          '<div class="nums">LEO ' + pt.log.length + " · HW " + pt.hw + "</div></div>";
+      }
+      h += "</div>";
+    }
+    put("parts", h);
+
+    if (S.disk && S.brokers[S.disk.broker].parts[S.disk.key] && S.disk.key.startsWith(t + "-")) {
+      const b = S.brokers[S.disk.broker], pt = b.parts[S.disk.key];
+      const segs = segments(pt.log);
+      let d = '<div class="disk"><div class="panel-head"><span class="label">Disk of broker ' + b.id + '</span><span class="mono muted" style="font-size:12px">/tmp/simplekafka/broker-' + b.id + "/" + esc(S.disk.key) + "/</span></div>" +
+        '<div class="tablewrap"><table><thead><tr><th>Segment file</th><th>Offsets</th><th>Bytes</th><th>.index entries (offset → position)</th></tr></thead><tbody>';
+      for (const sg of segs) {
+        d += "<tr><td>" + fname(sg.base) + ".log</td><td>" + (sg.count ? sg.base + "–" + sg.last : "empty") + "</td><td>" + sg.size + "</td><td>" +
+          (sg.index.length ? sg.index.map((e) => e[0] + sg.base + " → " + e[1]).join(", ") : "none yet") + "</td></tr>";
+      }
+      d += "<tr><td>high-watermark-checkpoint</td><td colspan=\"3\">" + pt.hw + "</td></tr></tbody></table></div>" +
+        '<div class="muted" style="font-size:12px">Each record is offset, size, CRC, timestamp, key and value. This demo rolls a new segment every ' + SEGMENT_BYTES + " bytes and indexes every " + INDEX_INTERVAL + " bytes so you can watch it happen (the broker defaults are 1 MB and 4 KB).</div></div>";
+      put("disk", d);
+    } else put("disk", "");
+  }
+
+  function renderSends() {
+    let h = "";
+    for (const s of S.sends.slice(0, 25)) {
+      let st;
+      if (s.status === "ok") st = '<span class="st-ok">acked</span>';
+      else if (s.status === "acks") st = '<span class="st-acks">waiting for ISR</span>';
+      else if (s.status === "retrying") st = '<span class="st-retrying">retrying</span>';
+      else st = '<span class="st-failed">failed</span>';
+      const where = s.offset != null && s.status === "ok" ? "partition " + s.partition + " · offset " + s.offset : s.partition != null ? "partition " + s.partition : "";
+      h += '<div class="send"><span class="v">' + (s.key ? '<span class="mono muted">' + esc(s.key) + ":</span> " : "") + esc(s.value) + "</span>" + st +
+        '<span class="where">' + esc(s.topic) + (where ? " · " + where : "") + "</span><span></span>" +
+        (s.note ? '<span class="note">' + esc(s.note) + "</span>" : "") + "</div>";
+    }
+    put("sends", h || '<p class="muted" style="margin:0">Nothing sent yet.</p>');
+  }
+
+  function renderConsumer() {
+    const tSel = $("t-sel"), t = tSel.value, cSel = $("c-part");
+    if (!t || !S.zk.topics[t]) { put("consumed", ""); put("c-status", ""); return; }
+    const ps = Object.keys(S.zk.topics[t].assignment);
+    syncSelect(cSel, ps.map((p) => t + "|" + p), ps.map((p) => t + "-" + p));
+    const p = +cSel.value.split("|")[1] || 0;
+    const st = S.zk.topics[t].states[p];
+    const L = st.leader >= 0 ? S.brokers[st.leader] : null;
+    const lp = L ? L.parts[t + "-" + p] : null;
+    if (!L || L.status !== "running" || !lp || lp.role !== "leader") {
+      put("c-status", '<span class="st-retrying">Fetch failed, retrying:</span> ' + (st.leader < 0 ? "LEADER_NOT_AVAILABLE" : "cannot reach leader broker " + st.leader));
+      return;
+    }
+    put("c-status", "Fetching from leader broker " + L.id + ". Only committed messages, offsets 0 to " + (lp.hw - 1) + ".");
+    let h = "";
+    for (const m of lp.log.slice(0, lp.hw)) h += "<div><span class=\"o\">offset=" + m.offset + "</span>" + (m.key != null ? " key=" + esc(m.key) : "") + " value=" + esc(m.value) + "</div>";
+    put("consumed", h || '<span class="muted">No committed messages yet.</span>');
+  }
+
+  function renderEvents() {
+    if (S.renderedEvents === S.events.length && cache.evFirst === S.events[0]) return;
+    const box = $("events");
+    const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+    box.innerHTML = S.events.map((e) => '<div class="ev k-' + e.kind + '"><span class="t">' + e.t + '</span><span class="s">' + esc(e.src) + '</span><span class="m">' + esc(e.msg) + "</span></div>").join("");
+    S.renderedEvents = S.events.length; cache.evFirst = S.events[0];
+    if (atBottom) box.scrollTop = box.scrollHeight;
+  }
+
+  function renderZk() {
+    let h = '<span class="path">/brokers/ids</span>\n';
+    for (const id of liveIds()) h += '  <span class="path">/' + id + '</span>   <span class="data">localhost:' + S.zk.brokers[id].port + '</span>   <span class="eph">ephemeral</span>\n';
+    h += '<span class="path">/controller</span>   ' + (S.zk.controller == null ? '<span class="eph">(missing, election pending)</span>' : '<span class="data">' + S.zk.controller + '</span>   <span class="eph">ephemeral</span>') + "\n";
+    h += '<span class="path">/brokers/topics</span>\n';
+    for (const t of topicNames()) {
+      const T = S.zk.topics[t];
+      h += '  <span class="path">/' + esc(t) + '</span>   <span class="data">' + Object.keys(T.assignment).map((p) => p + "=" + T.assignment[p].join(",")).join(";") + "</span>\n";
+      for (const p in T.states) {
+        const st = T.states[p];
+        h += '    <span class="path">/partitions/' + p + '/state</span>   <span class="data">leader=' + st.leader + ";epoch=" + st.epoch + ";isr=" + st.isr.join(",") + '</span>   <span class="eph">v' + st.version + "</span>\n";
+      }
+    }
+    put("zk", h);
+  }
+
+  function renderWire() {
+    if (!S.wire) { put("wire", '<p class="muted">Send a message to see its bytes.</p>'); put("w-size", ""); return; }
+    put("w-size", S.wire.total + " bytes");
+    put("wire", S.wire.fields.map((f) => '<div class="fld ' + f[2] + '"><span class="hex">' + Array.from(f[1], (b) => b.toString(16).padStart(2, "0")).join(" ") +
+      '</span><span class="lbl">' + esc(f[0]) + "</span></div>").join(""));
+  }
+
+  function render() {
+    renderBrokers(); renderPartitions(); renderSends(); renderConsumer(); renderEvents(); renderZk(); renderWire();
+  }
+
+  // ---------------------------------------------------------------- wiring
+  $("brokers").addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-act]");
+    if (!btn) return;
+    const id = +btn.dataset.id;
+    if (btn.dataset.act === "kill") crashBroker(id);
+    else if (btn.dataset.act === "stop") stopBroker(id);
+    else if (btn.dataset.act === "start") startBroker(id);
+    render();
+  });
+  $("brokers").addEventListener("change", (e) => {
+    if (e.target.dataset.act !== "slow") return;
+    const b = S.brokers[+e.target.dataset.id];
+    b.slow = e.target.checked;
+    logEv(b.id, b.slow ? "Replica fetcher paused (simulated slow network)" : "Replica fetcher resumed", b.slow ? "warn" : "");
+    render();
+  });
+  function pickDisk(el) {
+    const row = el.closest("[data-disk]");
+    if (!row) return;
+    const r = +row.dataset.disk, key = row.dataset.key;
+    S.disk = S.disk && S.disk.broker === r && S.disk.key === key ? null : { broker: r, key };
+    render();
+  }
+  $("parts").addEventListener("click", (e) => pickDisk(e.target));
+  $("parts").addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pickDisk(e.target); } });
+  $("t-sel").addEventListener("change", render);
+  $("c-part").addEventListener("change", render);
+  $("produce").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const topic = $("p-topic").value.trim() || "test-topic", val = $("p-val").value;
+    if (!val) return;
+    send(topic, $("p-key").value.trim(), val);
+    if (topicNames().includes(topic)) { $("t-sel").value = topic; }
+    render();
+  });
+  $("send10").addEventListener("click", () => {
+    const topic = $("p-topic").value.trim() || "test-topic";
+    const base = S.nextSendId;
+    for (let i = 0; i < 10; i++) send(topic, $("p-key").value.trim(), "event " + (base + i));
+    render();
+  });
+  $("reset").addEventListener("click", () => { for (const k in cache) delete cache[k]; init(); render(); });
+
+  init();
+  render();
+  setInterval(tick, 100);
+})();
+</script>
+</body>
+</html>
